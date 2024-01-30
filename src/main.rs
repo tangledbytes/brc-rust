@@ -7,6 +7,8 @@ use std::{
     slice,
 };
 
+const DATASET_SIZE: usize = 512;
+
 extern "C" {
     pub fn mmap(
         addr: *mut c_void,
@@ -69,17 +71,46 @@ fn print_store(sorted_store: &Vec<(&str, Data)>) {
     print!("}}");
 }
 
+fn byte_to_float(byt: &[u8]) -> f32 {
+    let is_neg = byt[0] == b'-';
+    let mut dec_pos = -1;
+    let mut num = 0.0;
+
+    for (idx, ch) in byt.iter().enumerate() {
+        if idx == 0 && is_neg {
+            continue;
+        }
+        if *ch == b'.' {
+            dec_pos = idx as i32;
+            continue;
+        }
+
+        let digit = (*ch - b'0') as f32;
+        num = (num * 10.0) + digit;
+    }
+    if dec_pos != -1 {
+        num /= f32::powi(10.0, (byt.len() as i32 - 1) - dec_pos);
+    }
+
+    if is_neg {
+        num * -1.0
+    } else {
+        num
+    }
+}
+
 fn main() {
     let path = env::args()
         .nth(1)
         .expect("Usage: <bin> <path-to-measurements.txt>");
-    let mut store: HashMap<&'static str, Data> = HashMap::new();
+
+    let mut store: HashMap<&'static str, Data> = HashMap::with_capacity(DATASET_SIZE);
 
     let data = load_file(&path);
 
     for line in std::str::from_utf8(data).unwrap().split('\n') {
         if let Some((name, val)) = line.trim().split_once(';') {
-            let val = val.parse::<f32>().unwrap();
+            let val = byte_to_float(val.as_bytes());
 
             if let Some(data) = store.get_mut(name) {
                 data.min = data.min.min(val);
