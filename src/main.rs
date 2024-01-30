@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, io::{BufRead, BufReader, Read}};
+use std::{collections::HashMap, env, io::{BufRead, BufReader}};
 
 #[derive(Debug)]
 struct Data {
@@ -8,7 +8,7 @@ struct Data {
     count: u32,
 }
 
-fn print_store(sorted_store: &Vec<(&str, Data)>) {
+fn print_store(sorted_store: &Vec<(String, Data)>) {
     print!("{{");
 
     for (idx, val) in sorted_store.iter().enumerate() {
@@ -29,11 +29,12 @@ fn print_store(sorted_store: &Vec<(&str, Data)>) {
 
 fn main() {
     let path = env::args().nth(1).expect("Usage: <bin> <path-to-measurements.txt>");
-    let mut store: HashMap<&str, Data> = HashMap::new();
+    let mut store: HashMap<String, Data> = HashMap::new();
 
-    let data = std::fs::read_to_string(path).expect("failed to read file into memory");
+    let file = std::fs::File::open(path).unwrap();
+    let reader = BufReader::new(file);
 
-    for line in data.trim().split('\n') {
+    for line in reader.lines().map_while(Result::ok) {
         let (name, val) = line.split_once(';').unwrap();
         let val = val.parse::<f32>().unwrap();
 
@@ -44,7 +45,7 @@ fn main() {
             data.sum += val;
             data.count += 1;
         } else {
-            store.insert(name, Data {
+            store.insert(name.to_string(), Data {
                 min: val,
                 max: val,
                 sum: val,
@@ -54,6 +55,7 @@ fn main() {
     }
 
     let mut v = store.into_iter().collect::<Vec<_>>();
-    v.sort_unstable_by_key(|p| p.0);
+    v.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
     print_store(&v);
 }
