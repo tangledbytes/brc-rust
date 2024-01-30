@@ -1,12 +1,11 @@
 use std::{
-    env,
     ffi::{c_int, c_void},
     fs,
     os::fd::AsRawFd,
-    slice,
+    slice, thread,
 };
 
-const MAP_SIZE: usize = 98317;
+const MAP_SIZE: usize = 10829;
 
 extern "C" {
     pub fn mmap(
@@ -173,9 +172,95 @@ fn load_file(filename: &str) -> &'static [u8] {
     unsafe { slice::from_raw_parts(res as *const _ as *const u8, size as _) }
 }
 
-fn process(data: &'static [u8], store: &mut Map) {
-    let mut offset = 0;
-    while let Some(parsed) = parse_line(data, offset) {
+fn cluster_process(filename: &str, store: &mut Map) {
+    let cpus = thread::available_parallelism().unwrap().get() as u64;
+    let mut stores: Vec<Map> = Vec::with_capacity(cpus as usize);
+    for _ in 0..cpus {
+        stores.push(Map::new());
+    }
+
+    let file = fs::File::open(filename).expect("failed to open file");
+    let size = file
+        .metadata()
+        .expect("failed to get metadata of the file")
+        .len();
+    let data_size = size;
+    let size_per_cpu = data_size / cpus;
+    let remains = data_size % cpus;
+
+    thread::scope(|s| {
+        for (idx, store) in stores.iter_mut().enumerate() {
+            let itr_remainder = remains;
+
+            s.spawn(move || {
+                let mut size = size_per_cpu;
+                let idx = idx as u64;
+                if idx == cpus - 1 {
+                    size += itr_remainder;
+                }
+
+                let data = load_file(filename);
+                consume(data, (idx * size_per_cpu) as _, size as _, store);
+            });
+        }
+    });
+
+    for local_store in stores {
+        for (k, v) in local_store {
+            if let Some(data) = store.get_mut(k) {
+                if v.min < data.min {
+                    data.min = v.min;
+                }
+                if v.max > data.max {
+                    data.max = v.max;
+                }
+
+                data.sum += v.sum;
+                data.count += v.count;
+            } else {
+                store.insert(
+                    k,
+                    Data {
+                        min: v.min,
+                        max: v.max,
+                        sum: v.sum,
+                        count: v.count,
+                    },
+                );
+            }
+        }
+    }
+}
+
+fn consume(data: &'static [u8], mut chunk_offset: usize, size: usize, store: &mut Map) {
+    // 1. Find the start point
+    let start: usize;
+    if chunk_offset == 0 {
+        start = 0;
+    } else {
+        loop {
+            if data[chunk_offset - 1] == b'\n' {
+                start = chunk_offset as _;
+                break;
+            }
+
+            chunk_offset += 1;
+        }
+    }
+
+    // 2. Parse the data
+    let mut readptr = start;
+    while readptr - start < size {
+        if let Some(end) = process(data, readptr, store) {
+            readptr = end + 1;
+        } else {
+            break;
+        }
+    }
+}
+
+fn process(data: &'static [u8], offset: usize, store: &mut Map) -> Option<usize> {
+    if let Some(parsed) = parse_line(data, offset) {
         if let Some(data) = store.get_mut_with_hash(parsed.place, parsed.place_hash) {
             if parsed.val < data.min {
                 data.min = parsed.val;
@@ -199,7 +284,9 @@ fn process(data: &'static [u8], store: &mut Map) {
             );
         }
 
-        offset = parsed.next + 1;
+        Some(parsed.next)
+    } else {
+        None
     }
 }
 
@@ -306,15 +393,13 @@ fn print_store(sorted_store: &Vec<(&[u8], Data)>) {
 }
 
 fn main() {
-    let path = env::args()
+    let path = std::env::args()
         .nth(1)
         .expect("Usage: <bin> <path-to-measurements.txt>");
 
     let mut store = Map::new();
 
-    let data = load_file(&path);
-
-    process(data, &mut store);
+    cluster_process(&path, &mut store);
 
     let mut v = store.into_iter().collect::<Vec<_>>();
     v.sort_unstable_by_key(|p| p.0);
