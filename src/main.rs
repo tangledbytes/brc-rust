@@ -5,6 +5,8 @@ use std::{
     slice, thread,
 };
 
+mod util;
+
 const MAP_SIZE: usize = 10829;
 
 extern "C" {
@@ -193,6 +195,9 @@ fn cluster_process(filename: &str, store: &mut Map) {
             let itr_remainder = remains;
 
             s.spawn(move || {
+                // Pin thread to a CPU
+                util::set_cpu_affinity(idx);
+
                 let mut size = size_per_cpu;
                 let idx = idx as u64;
                 if idx == cpus - 1 {
