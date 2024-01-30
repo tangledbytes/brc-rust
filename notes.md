@@ -66,3 +66,16 @@ Total time taken: 62 sec
   - Finding the delimiter
   - Parsing the float
   - Generating the hash
+
+## Iteration 6
+- Support hashing outside the hashmap.
+- Inline the entire parsing hence we do not traverse the byte slice over and over again.
+- Make the `byte_to_float` very specific to the data format, ie support `ab.c` and `b.c` only.
+
+Total time taken: 23 sec
+
+### Observations
+![Sixth flamegraph](./assets/flamegraph.6.svg)
+
+- Now most of the time is spent either parsing or in retreiving the data from the hashmap.
+- Significant portion of our time is spent in comparing the byte slice in hashmap.
