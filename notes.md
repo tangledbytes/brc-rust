@@ -93,3 +93,14 @@ Total time taken: 16.5 sec
 
 - Flamegraph no longer yields a lot of information.
 - A lot of page faults are observed.
+
+## Iteration 8
+- Use thread per CPU core and spread the tasks equally among them.
+- Use smaller table size upon manually finding the perfect table size.
+
+Total time taken: 1.2 sec
+
+### Observations
+![Eighth flamegraph](./assets/flamegraph.8.svg)
+
+- Again not much info available in the flamegraph.
