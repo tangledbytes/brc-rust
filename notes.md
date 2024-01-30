@@ -104,3 +104,11 @@ Total time taken: 1.2 sec
 ![Eighth flamegraph](./assets/flamegraph.8.svg)
 
 - Again not much info available in the flamegraph.
+
+## Iteration 9
+- Pin threads to CPU
+
+Total time taken: 1.1 sec
+
+### Observations 
+![Ninth flamegraph](./assets/flamegraph.9.svg)
