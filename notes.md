@@ -27,3 +27,12 @@ Total time taken: 85 sec
 
 - Because the file is already in a RAMDisk so reading all at once vs reading line by line does not seem to be making any difference.
 - It seems that iterating over the file this way isn't really cutting it.
+
+## Iteration 3
+![Third flamegraph](./assets/flamegraph.3.svg)
+
+- Use single thread to perform all of the operations.
+- Use standard library for splitting the line and parsing them into `<location, data>`.
+- Use `mmap` to map the file into program memory and the iterate over it line by line by treating the byte slice as string. The primary win can come from the fact that we won't have to store copies of the string into memory rather can store references to these mapped memory.
+
+Total time taken: 78 sec
