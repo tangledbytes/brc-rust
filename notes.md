@@ -79,3 +79,17 @@ Total time taken: 23 sec
 
 - Now most of the time is spent either parsing or in retreiving the data from the hashmap.
 - Significant portion of our time is spent in comparing the byte slice in hashmap.
+
+## Iteration 7
+- Our hash function is perfect therefore there are no conflicts. Given that we know our data beforehand, we should be able to remove
+  - Loop from our hash map functions (no collision, no retries)
+  - Bytes comparison as it is guaranteed that all of our entries get a unique hash value
+- We are using bounds checks everywhere for no reason, remove them.
+
+Total time taken: 16.5 sec
+
+### Observations
+![Seventh flamegraph](./assets/flamegraph.7.svg)
+
+- Flamegraph no longer yields a lot of information.
+- A lot of page faults are observed.
