@@ -78,25 +78,26 @@ fn main() {
     let data = load_file(&path);
 
     for line in std::str::from_utf8(data).unwrap().split('\n') {
-        let (name, val) = line.trim().split_once(';').unwrap();
-        let val = val.parse::<f32>().unwrap();
+        if let Some((name, val)) = line.trim().split_once(';') {
+            let val = val.parse::<f32>().unwrap();
 
-        if let Some(data) = store.get_mut(name) {
-            data.min = data.min.min(val);
-            data.max = data.max.max(val);
+            if let Some(data) = store.get_mut(name) {
+                data.min = data.min.min(val);
+                data.max = data.max.max(val);
 
-            data.sum += val;
-            data.count += 1;
-        } else {
-            store.insert(
-                name,
-                Data {
-                    min: val,
-                    max: val,
-                    sum: val,
-                    count: 1,
-                },
-            );
+                data.sum += val;
+                data.count += 1;
+            } else {
+                store.insert(
+                    name,
+                    Data {
+                        min: val,
+                        max: val,
+                        sum: val,
+                        count: 1,
+                    },
+                );
+            }
         }
     }
 
