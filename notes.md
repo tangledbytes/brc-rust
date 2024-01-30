@@ -41,9 +41,28 @@ Total time taken: 78 sec
 ## Iteration 4
 - Use standard library for parsing the line but custom function for parsing the float.
 - Use properly sized HashMap (we know that there are exactly 413 different cities in our dataset)
+
+Total time taken: 74 sec
   
 ### Observations
 ![Fourth flamegraph](./assets/flamegraph.4.svg)
 
 - `HashMap::get_mut` is taking significant amount of time.
 - `from_utf8` might be taking longer than expected as it does the checks, we might be able to get away with using the unsafe as we control the input.
+
+## Iteration 5
+- Use custom HashMap - With 98317 as table size. Tried several prime numbers from [here](https://planetmath.org/goodhashtableprimes).
+- Use unsafe conversion from bytes to string
+
+Total time taken: 62 sec
+
+### Observations
+![Fifth flamegraph](./assets/flamegraph.5.svg)
+
+- Our custom hash map is faster than the standard library one but is still slow, can be improved.
+- Our `byte_to_float` is too generic and probably can be made specific to our data so as to improve its performance.
+- It can be noticed that we are iterating over the same set of bytes over and over again. We iterate over them while:
+  - Finding the newline character
+  - Finding the delimiter
+  - Parsing the float
+  - Generating the hash
