@@ -29,12 +29,12 @@ struct Data {
 
 struct Map {
     slots1: Box<[Option<u32>; MAP_SIZE]>,
-    slots2: Box<[Option<(&'static str, Data)>; MAP_SIZE]>,
+    slots2: Box<[Option<(&'static [u8], Data)>; MAP_SIZE]>,
 }
 
 impl Map {
     const SLOT1_DEFAULT_VALUE: Option<u32> = None;
-    const SLOT2_DEFAULT_VALUE: Option<(&'static str, Data)> = None;
+    const SLOT2_DEFAULT_VALUE: Option<(&'static [u8], Data)> = None;
 
     fn new() -> Self {
         Map {
@@ -43,8 +43,17 @@ impl Map {
         }
     }
 
-    fn insert(&mut self, k: &'static str, v: Data) {
-        let hash = Self::hash(k.as_bytes());
+    fn insert(&mut self, k: &'static [u8], v: Data) {
+        let hash = Self::hash(k);
+        self.insert_with_hash(k, v, hash)
+    }
+
+    fn get_mut(&mut self, k: &'static [u8]) -> Option<&mut Data> {
+        let hash = Self::hash(k);
+        self.get_mut_with_hash(k, hash)
+    }
+
+    fn insert_with_hash(&mut self, k: &'static [u8], v: Data, hash: u32) {
         let slot_idx = (hash as usize) % MAP_SIZE;
         let mut prober = slot_idx;
 
@@ -73,8 +82,7 @@ impl Map {
         panic!("shouldn't be here!")
     }
 
-    fn get_mut(&mut self, k: &'static str) -> Option<&mut Data> {
-        let hash = Self::hash(k.as_bytes());
+    fn get_mut_with_hash(&mut self, k: &'static [u8], hash: u32) -> Option<&mut Data> {
         let slot_idx = (hash as usize) % MAP_SIZE;
         let mut prober = slot_idx;
 
@@ -107,8 +115,10 @@ impl Map {
     fn hash(k: &[u8]) -> u32 {
         let mut v: u32 = 2166136261;
 
-        for ch in k {
-            v ^= *ch as u32;
+        for idx in 0..k.len() {
+            let ch = k[idx];
+
+            v ^= ch as u32;
             v = v.wrapping_mul(16777619);
         }
 
@@ -117,7 +127,7 @@ impl Map {
 }
 
 impl IntoIterator for Map {
-    type Item = (&'static str, Data);
+    type Item = (&'static [u8], Data);
 
     type IntoIter = MapIter;
 
@@ -132,7 +142,7 @@ struct MapIter {
 }
 
 impl Iterator for MapIter {
-    type Item = (&'static str, Data);
+    type Item = (&'static [u8], Data);
 
     fn next(&mut self) -> Option<Self::Item> {
         for idx in self.idx..MAP_SIZE {
@@ -149,6 +159,13 @@ impl Iterator for MapIter {
 
         None
     }
+}
+
+struct ParseResult {
+    place: &'static [u8],
+    place_hash: u32,
+    val: f32,
+    next: usize,
 }
 
 fn load_file(filename: &str) -> &'static [u8] {
@@ -175,13 +192,126 @@ fn load_file(filename: &str) -> &'static [u8] {
     unsafe { slice::from_raw_parts(res as *const _ as *const u8, size as _) }
 }
 
-fn print_store(sorted_store: &Vec<(&str, Data)>) {
+fn process(data: &'static [u8], store: &mut Map) {
+    let mut offset = 0;
+    while let Some(parsed) = parse_line(data, offset) {
+        if let Some(data) = store.get_mut_with_hash(parsed.place, parsed.place_hash) {
+            if parsed.val < data.min {
+                data.min = parsed.val;
+            }
+            if parsed.val > data.max {
+                data.max = parsed.val;
+            }
+
+            data.sum += parsed.val;
+            data.count += 1;
+        } else {
+            store.insert_with_hash(
+                parsed.place,
+                Data {
+                    min: parsed.val,
+                    max: parsed.val,
+                    sum: parsed.val,
+                    count: 1,
+                },
+                parsed.place_hash,
+            );
+        }
+
+        offset = parsed.next + 1;
+    }
+}
+
+fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
+    if offset >= data.len() {
+        return None;
+    }
+
+    let mut delim = offset;
+
+    let mut loc_hash: u32 = 2166136261;
+    let mut loc: &[u8] = &data[offset..delim]; // useless init
+
+    let mut idx = offset;
+
+    // Find the delimiter and compute hash till that point
+    while idx < data.len() {
+        let ch = data[idx];
+        if ch == b';' {
+            delim = idx;
+            loc = &data[offset..delim];
+
+            break;
+        }
+
+        loc_hash ^= ch as u32;
+        loc_hash = loc_hash.wrapping_mul(16777619);
+
+        idx += 1;
+    }
+
+    // Skip past delimiter
+    idx += 1;
+
+    let mut val: i32;
+    let mut ch = data[idx];
+    let divisor = if ch == b'-' {
+        idx += 1;
+        -10.
+    } else {
+        10.
+    };
+
+    // Parse the float and find new line (not really, assume that there is just one f64 and then '\n')
+    // Assuming the structure can be either:
+    // 1. ab.c\n
+    // 2. b.c\n
+    ch = data[idx];
+
+    val = (ch - b'0') as i32;
+    val *= 10;
+
+    idx += 1;
+    ch = data[idx];
+
+    if ch == b'.' {
+        idx += 1;
+        ch = data[idx];
+
+        val += (ch - b'0') as i32;
+
+        return Some(ParseResult {
+            place: loc,
+            place_hash: loc_hash,
+            val: val as f32 / divisor,
+            next: idx + 1,
+        });
+    }
+
+    val += (ch - b'0') as i32;
+    val *= 10;
+
+    // Assume that the next character will be a decimal
+    idx += 1 + 1;
+    ch = data[idx];
+
+    val += (ch - b'0') as i32;
+
+    Some(ParseResult {
+        place: loc,
+        place_hash: loc_hash,
+        val: val as f32 / divisor,
+        next: idx + 1,
+    })
+}
+
+fn print_store(sorted_store: &Vec<(&[u8], Data)>) {
     print!("{{");
 
     for (idx, val) in sorted_store.iter().enumerate() {
         print!(
             "{}={:.1}/{:.1}/{:.1}",
-            val.0,
+            unsafe { std::str::from_utf8_unchecked(val.0) },
             val.1.min,
             val.1.sum / (val.1.count as f32),
             val.1.max
@@ -194,34 +324,6 @@ fn print_store(sorted_store: &Vec<(&str, Data)>) {
     print!("}}");
 }
 
-fn byte_to_float(byt: &[u8]) -> f32 {
-    let is_neg = byt[0] == b'-';
-    let mut dec_pos = -1;
-    let mut num = 0.0;
-
-    for (idx, ch) in byt.iter().enumerate() {
-        if idx == 0 && is_neg {
-            continue;
-        }
-        if *ch == b'.' {
-            dec_pos = idx as i32;
-            continue;
-        }
-
-        let digit = (*ch - b'0') as f32;
-        num = (num * 10.0) + digit;
-    }
-    if dec_pos != -1 {
-        num /= f32::powi(10.0, (byt.len() as i32 - 1) - dec_pos);
-    }
-
-    if is_neg {
-        num * -1.0
-    } else {
-        num
-    }
-}
-
 fn main() {
     let path = env::args()
         .nth(1)
@@ -231,29 +333,7 @@ fn main() {
 
     let data = load_file(&path);
 
-    for line in unsafe { std::str::from_utf8_unchecked(data) }.split('\n') {
-        if let Some((name, val)) = line.trim().split_once(';') {
-            let val = byte_to_float(val.as_bytes());
-
-            if let Some(data) = store.get_mut(name) {
-                data.min = data.min.min(val);
-                data.max = data.max.max(val);
-
-                data.sum += val;
-                data.count += 1;
-            } else {
-                store.insert(
-                    name,
-                    Data {
-                        min: val,
-                        max: val,
-                        sum: val,
-                        count: 1,
-                    },
-                );
-            }
-        }
-    }
+    process(data, &mut store);
 
     let mut v = store.into_iter().collect::<Vec<_>>();
     v.sort_unstable_by_key(|p| p.0);
