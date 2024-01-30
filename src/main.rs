@@ -55,70 +55,51 @@ impl Map {
 
     fn insert_with_hash(&mut self, k: &'static [u8], v: Data, hash: u32) {
         let slot_idx = (hash as usize) % MAP_SIZE;
-        let mut prober = slot_idx;
 
-        loop {
-            if let Some(slot_hash) = self.slots1[prober] {
-                let slot2 = self.slots2[prober]
-                    .as_mut()
-                    .expect("should exist if slot1 is filled");
-                if slot_hash == hash && slot2.0.cmp(k).is_eq() {
-                    slot2.1 = v;
-                    return;
-                }
-
-                // Collision, try next
-                prober = (prober + 1) % MAP_SIZE;
-                if prober == slot_idx {
-                    break;
-                }
-            } else {
-                self.slots1[slot_idx] = Some(hash);
-                self.slots2[slot_idx] = Some((k, v));
+        if let Some(slot_hash) = unsafe { *self.slots1.get_unchecked(slot_idx) } {
+            let slot2 = unsafe { self.slots2.get_unchecked_mut(slot_idx) }
+                .as_mut()
+                .expect("should exist if slot1 is filled");
+            if slot_hash == hash {
+                slot2.1 = v;
                 return;
             }
-        }
 
-        panic!("shouldn't be here!")
+            panic!("unexpected insert collision")
+        } else {
+            unsafe {
+                *self.slots1.get_unchecked_mut(slot_idx) = Some(hash);
+            }
+            unsafe {
+                *self.slots2.get_unchecked_mut(slot_idx) = Some((k, v));
+            }
+        }
     }
 
     fn get_mut_with_hash(&mut self, k: &'static [u8], hash: u32) -> Option<&mut Data> {
         let slot_idx = (hash as usize) % MAP_SIZE;
-        let mut prober = slot_idx;
 
-        loop {
-            if let Some(slot_hash) = self.slots1[prober] {
-                let slot2 = self.slots2[prober]
-                    .as_ref()
+        if let Some(slot_hash) = unsafe { *self.slots1.get_unchecked(slot_idx) } {
+            if slot_hash == hash {
+                let data = unsafe { self.slots2.get_unchecked_mut(slot_idx) }
+                    .as_mut()
                     .expect("should exist if slot1 is filled");
-
-                if slot_hash == hash && slot2.0.cmp(k).is_eq() {
-                    let data = self.slots2[prober]
-                        .as_mut()
-                        .expect("should exist if slot1 is filled");
-                    return Some(&mut data.1);
-                }
-
-                // Collision, try next
-                prober = (prober + 1) % MAP_SIZE;
-                if prober == slot_idx {
-                    break;
-                }
-            } else {
-                return None;
+                return Some(&mut data.1);
             }
-        }
 
-        None
+            panic!("unexpected read collision")
+        } else {
+            None
+        }
     }
 
     fn hash(k: &[u8]) -> u32 {
         let mut v: u32 = 2166136261;
 
         for idx in 0..k.len() {
-            let ch = k[idx];
+            let ch = unsafe { k.get_unchecked(idx) };
 
-            v ^= ch as u32;
+            v ^= *ch as u32;
             v = v.wrapping_mul(16777619);
         }
 
@@ -230,16 +211,16 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
     let mut delim = offset;
 
     let mut loc_hash: u32 = 2166136261;
-    let mut loc: &[u8] = &data[offset..delim]; // useless init
+    let mut loc: &[u8] = unsafe { data.get_unchecked(offset..delim) }; // useless init
 
     let mut idx = offset;
 
     // Find the delimiter and compute hash till that point
     while idx < data.len() {
-        let ch = data[idx];
+        let ch = unsafe { *data.get_unchecked(idx) };
         if ch == b';' {
             delim = idx;
-            loc = &data[offset..delim];
+            loc = unsafe { data.get_unchecked(offset..delim) };
 
             break;
         }
@@ -254,7 +235,7 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
     idx += 1;
 
     let mut val: i32;
-    let mut ch = data[idx];
+    let mut ch = unsafe { *data.get_unchecked(idx) };
     let divisor = if ch == b'-' {
         idx += 1;
         -10.
@@ -266,17 +247,17 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
     // Assuming the structure can be either:
     // 1. ab.c\n
     // 2. b.c\n
-    ch = data[idx];
+    ch = unsafe { *data.get_unchecked(idx) };
 
     val = (ch - b'0') as i32;
     val *= 10;
 
     idx += 1;
-    ch = data[idx];
+    ch = unsafe { *data.get_unchecked(idx) };
 
     if ch == b'.' {
         idx += 1;
-        ch = data[idx];
+        ch = unsafe { *data.get_unchecked(idx) };
 
         val += (ch - b'0') as i32;
 
@@ -293,7 +274,7 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
 
     // Assume that the next character will be a decimal
     idx += 1 + 1;
-    ch = data[idx];
+    ch = unsafe { *data.get_unchecked(idx) };
 
     val += (ch - b'0') as i32;
 
