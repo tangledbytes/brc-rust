@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     env,
     ffi::{c_int, c_void},
     fs,
@@ -7,7 +6,7 @@ use std::{
     slice,
 };
 
-const DATASET_SIZE: usize = 512;
+const MAP_SIZE: usize = 98317;
 
 extern "C" {
     pub fn mmap(
@@ -26,6 +25,130 @@ struct Data {
     max: f32,
     sum: f32,
     count: u32,
+}
+
+struct Map {
+    slots1: Box<[Option<u32>; MAP_SIZE]>,
+    slots2: Box<[Option<(&'static str, Data)>; MAP_SIZE]>,
+}
+
+impl Map {
+    const SLOT1_DEFAULT_VALUE: Option<u32> = None;
+    const SLOT2_DEFAULT_VALUE: Option<(&'static str, Data)> = None;
+
+    fn new() -> Self {
+        Map {
+            slots1: Box::new([Self::SLOT1_DEFAULT_VALUE; MAP_SIZE]),
+            slots2: Box::new([Self::SLOT2_DEFAULT_VALUE; MAP_SIZE]),
+        }
+    }
+
+    fn insert(&mut self, k: &'static str, v: Data) {
+        let hash = Self::hash(k.as_bytes());
+        let slot_idx = (hash as usize) % MAP_SIZE;
+        let mut prober = slot_idx;
+
+        loop {
+            if let Some(slot_hash) = self.slots1[prober] {
+                let slot2 = self.slots2[prober]
+                    .as_mut()
+                    .expect("should exist if slot1 is filled");
+                if slot_hash == hash && slot2.0.cmp(k).is_eq() {
+                    slot2.1 = v;
+                    return;
+                }
+
+                // Collision, try next
+                prober = (prober + 1) % MAP_SIZE;
+                if prober == slot_idx {
+                    break;
+                }
+            } else {
+                self.slots1[slot_idx] = Some(hash);
+                self.slots2[slot_idx] = Some((k, v));
+                return;
+            }
+        }
+
+        panic!("shouldn't be here!")
+    }
+
+    fn get_mut(&mut self, k: &'static str) -> Option<&mut Data> {
+        let hash = Self::hash(k.as_bytes());
+        let slot_idx = (hash as usize) % MAP_SIZE;
+        let mut prober = slot_idx;
+
+        loop {
+            if let Some(slot_hash) = self.slots1[prober] {
+                let slot2 = self.slots2[prober]
+                    .as_ref()
+                    .expect("should exist if slot1 is filled");
+
+                if slot_hash == hash && slot2.0.cmp(k).is_eq() {
+                    let data = self.slots2[prober]
+                        .as_mut()
+                        .expect("should exist if slot1 is filled");
+                    return Some(&mut data.1);
+                }
+
+                // Collision, try next
+                prober = (prober + 1) % MAP_SIZE;
+                if prober == slot_idx {
+                    break;
+                }
+            } else {
+                return None;
+            }
+        }
+
+        None
+    }
+
+    fn hash(k: &[u8]) -> u32 {
+        let mut v: u32 = 2166136261;
+
+        for ch in k {
+            v ^= *ch as u32;
+            v = v.wrapping_mul(16777619);
+        }
+
+        v
+    }
+}
+
+impl IntoIterator for Map {
+    type Item = (&'static str, Data);
+
+    type IntoIter = MapIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        MapIter { idx: 0, map: self }
+    }
+}
+
+struct MapIter {
+    idx: usize,
+    map: Map,
+}
+
+impl Iterator for MapIter {
+    type Item = (&'static str, Data);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for idx in self.idx..MAP_SIZE {
+            if self.map.slots1[idx].is_some() {
+                self.idx = idx + 1;
+
+                return Some(
+                    self.map.slots2[idx]
+                        .take()
+                        .expect("should exist if slot1 is filled"),
+                );
+            }
+        }
+
+        None
+    }
 }
 
 fn load_file(filename: &str) -> &'static [u8] {
@@ -104,11 +227,11 @@ fn main() {
         .nth(1)
         .expect("Usage: <bin> <path-to-measurements.txt>");
 
-    let mut store: HashMap<&'static str, Data> = HashMap::with_capacity(DATASET_SIZE);
+    let mut store = Map::new();
 
     let data = load_file(&path);
 
-    for line in std::str::from_utf8(data).unwrap().split('\n') {
+    for line in unsafe { std::str::from_utf8_unchecked(data) }.split('\n') {
         if let Some((name, val)) = line.trim().split_once(';') {
             let val = byte_to_float(val.as_bytes());
 
