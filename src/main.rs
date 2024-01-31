@@ -7,7 +7,7 @@ use std::{
 
 mod util;
 
-const MAP_SIZE: usize = 10829;
+const MAP_SIZE: usize = 7599;
 
 extern "C" {
     pub fn mmap(
@@ -22,94 +22,50 @@ extern "C" {
 
 #[derive(Debug)]
 struct Data {
-    min: f32,
-    max: f32,
-    sum: f32,
+    min: i32,
+    max: i32,
+    sum: i32,
     count: u32,
 }
 
-struct Map {
-    slots1: Box<[Option<u32>; MAP_SIZE]>,
-    slots2: Box<[Option<(&'static [u8], Data)>; MAP_SIZE]>,
+struct LookupTable {
+    slots: Box<[Option<(&'static [u8], Data)>; MAP_SIZE]>,
 }
 
-impl Map {
-    const SLOT1_DEFAULT_VALUE: Option<u32> = None;
-    const SLOT2_DEFAULT_VALUE: Option<(&'static [u8], Data)> = None;
+impl LookupTable {
+    const SLOT_DEFAULT_VALUE: Option<(&'static [u8], Data)> = None;
 
     fn new() -> Self {
-        Map {
-            slots1: Box::new([Self::SLOT1_DEFAULT_VALUE; MAP_SIZE]),
-            slots2: Box::new([Self::SLOT2_DEFAULT_VALUE; MAP_SIZE]),
+        LookupTable {
+            slots: Box::new([Self::SLOT_DEFAULT_VALUE; MAP_SIZE]),
         }
     }
 
-    fn insert(&mut self, k: &'static [u8], v: Data) {
-        let hash = Self::hash(k);
-        self.insert_with_hash(k, v, hash)
-    }
-
-    fn get_mut(&mut self, k: &'static [u8]) -> Option<&mut Data> {
-        let hash = Self::hash(k);
-        self.get_mut_with_hash(k, hash)
-    }
-
     fn insert_with_hash(&mut self, k: &'static [u8], v: Data, hash: u32) {
-        let slot_idx = (hash as usize) % MAP_SIZE;
+        let slot_idx = (hash as usize) % (MAP_SIZE);
 
-        if let Some(slot_hash) = unsafe { *self.slots1.get_unchecked(slot_idx) } {
-            let slot2 = unsafe { self.slots2.get_unchecked_mut(slot_idx) }
-                .as_mut()
-                .expect("should exist if slot1 is filled");
-            if slot_hash == hash {
-                slot2.1 = v;
-                return;
-            }
-
-            panic!("unexpected insert collision")
+        if let Some(slot) = unsafe { self.slots.get_unchecked_mut(slot_idx) } {
+            slot.1 = v;
         } else {
             unsafe {
-                *self.slots1.get_unchecked_mut(slot_idx) = Some(hash);
-            }
-            unsafe {
-                *self.slots2.get_unchecked_mut(slot_idx) = Some((k, v));
+                *self.slots.get_unchecked_mut(slot_idx) = Some((k, v));
             }
         }
     }
 
     fn get_mut_with_hash(&mut self, k: &'static [u8], hash: u32) -> Option<&mut Data> {
-        let slot_idx = (hash as usize) % MAP_SIZE;
+        let slot_idx = (hash as usize) % (MAP_SIZE);
 
-        if let Some(slot_hash) = unsafe { *self.slots1.get_unchecked(slot_idx) } {
-            if slot_hash == hash {
-                let data = unsafe { self.slots2.get_unchecked_mut(slot_idx) }
-                    .as_mut()
-                    .expect("should exist if slot1 is filled");
-                return Some(&mut data.1);
-            }
-
-            panic!("unexpected read collision")
+        if let Some(slot) = unsafe { self.slots.get_unchecked_mut(slot_idx) } {
+            Some(&mut slot.1)
         } else {
             None
         }
     }
-
-    fn hash(k: &[u8]) -> u32 {
-        let mut v: u32 = 2166136261;
-
-        for idx in 0..k.len() {
-            let ch = unsafe { k.get_unchecked(idx) };
-
-            v ^= *ch as u32;
-            v = v.wrapping_mul(16777619);
-        }
-
-        v
-    }
 }
 
-impl IntoIterator for Map {
-    type Item = (&'static [u8], Data);
+impl IntoIterator for LookupTable {
+    type Item = (&'static [u8], Data, u32);
 
     type IntoIter = MapIter;
 
@@ -120,22 +76,16 @@ impl IntoIterator for Map {
 
 struct MapIter {
     idx: usize,
-    map: Map,
+    map: LookupTable,
 }
 
 impl Iterator for MapIter {
-    type Item = (&'static [u8], Data);
+    type Item = (&'static [u8], Data, u32);
 
     fn next(&mut self) -> Option<Self::Item> {
         for idx in self.idx..MAP_SIZE {
-            if self.map.slots1[idx].is_some() {
-                self.idx = idx + 1;
-
-                return Some(
-                    self.map.slots2[idx]
-                        .take()
-                        .expect("should exist if slot1 is filled"),
-                );
+            if let Some((k, v)) = unsafe { self.map.slots.get_unchecked_mut(idx).take() } {
+                return Some((k, v, idx as u32));
             }
         }
 
@@ -146,7 +96,7 @@ impl Iterator for MapIter {
 struct ParseResult {
     place: &'static [u8],
     place_hash: u32,
-    val: f32,
+    val: i32,
     next: usize,
 }
 
@@ -174,11 +124,11 @@ fn load_file(filename: &str) -> &'static [u8] {
     unsafe { slice::from_raw_parts(res as *const _ as *const u8, size as _) }
 }
 
-fn cluster_process(filename: &str, store: &mut Map) {
+fn cluster_process(filename: &str, store: &mut LookupTable) {
     let cpus = thread::available_parallelism().unwrap().get() as u64;
-    let mut stores: Vec<Map> = Vec::with_capacity(cpus as usize);
+    let mut stores: Vec<LookupTable> = Vec::with_capacity(cpus as usize);
     for _ in 0..cpus {
-        stores.push(Map::new());
+        stores.push(LookupTable::new());
     }
 
     let file = fs::File::open(filename).expect("failed to open file");
@@ -211,19 +161,14 @@ fn cluster_process(filename: &str, store: &mut Map) {
     });
 
     for local_store in stores {
-        for (k, v) in local_store {
-            if let Some(data) = store.get_mut(k) {
-                if v.min < data.min {
-                    data.min = v.min;
-                }
-                if v.max > data.max {
-                    data.max = v.max;
-                }
-
+        for (k, v, hash) in local_store {
+            if let Some(data) = store.get_mut_with_hash(k, hash) {
+                data.min = data.min.min(v.min);
+                data.max = data.max.max(v.max);
                 data.sum += v.sum;
                 data.count += v.count;
             } else {
-                store.insert(
+                store.insert_with_hash(
                     k,
                     Data {
                         min: v.min,
@@ -231,13 +176,14 @@ fn cluster_process(filename: &str, store: &mut Map) {
                         sum: v.sum,
                         count: v.count,
                     },
+                    hash,
                 );
             }
         }
     }
 }
 
-fn consume(data: &'static [u8], mut chunk_offset: usize, size: usize, store: &mut Map) {
+fn consume(data: &'static [u8], mut chunk_offset: usize, size: usize, store: &mut LookupTable) {
     // 1. Find the start point
     let start: usize;
     if chunk_offset == 0 {
@@ -264,16 +210,11 @@ fn consume(data: &'static [u8], mut chunk_offset: usize, size: usize, store: &mu
     }
 }
 
-fn process(data: &'static [u8], offset: usize, store: &mut Map) -> Option<usize> {
+fn process(data: &'static [u8], offset: usize, store: &mut LookupTable) -> Option<usize> {
     if let Some(parsed) = parse_line(data, offset) {
         if let Some(data) = store.get_mut_with_hash(parsed.place, parsed.place_hash) {
-            if parsed.val < data.min {
-                data.min = parsed.val;
-            }
-            if parsed.val > data.max {
-                data.max = parsed.val;
-            }
-
+            data.min = data.min.min(parsed.val);
+            data.max = data.max.max(parsed.val);
             data.sum += parsed.val;
             data.count += 1;
         } else {
@@ -302,7 +243,7 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
 
     let mut delim = offset;
 
-    let mut loc_hash: u32 = 2166136261;
+    let mut loc_hash: u32 = 5381;
     let mut loc: &[u8] = unsafe { data.get_unchecked(offset..delim) }; // useless init
 
     let mut idx = offset;
@@ -317,8 +258,7 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
             break;
         }
 
-        loc_hash ^= ch as u32;
-        loc_hash = loc_hash.wrapping_mul(16777619);
+        loc_hash = ch as u32 + (loc_hash << 6) + (loc_hash << 16) - loc_hash;
 
         idx += 1;
     }
@@ -328,11 +268,11 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
 
     let mut val: i32;
     let mut ch = unsafe { *data.get_unchecked(idx) };
-    let divisor = if ch == b'-' {
+    let isneg = if ch == b'-' {
         idx += 1;
-        -10.
+        true
     } else {
-        10.
+        false
     };
 
     // Parse the float and find new line (not really, assume that there is just one f64 and then '\n')
@@ -341,7 +281,7 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
     // 2. b.c\n
     ch = unsafe { *data.get_unchecked(idx) };
 
-    val = (ch - b'0') as i32;
+    val = ch as i32;
     val *= 10;
 
     idx += 1;
@@ -351,43 +291,47 @@ fn parse_line(data: &'static [u8], offset: usize) -> Option<ParseResult> {
         idx += 1;
         ch = unsafe { *data.get_unchecked(idx) };
 
-        val += (ch - b'0') as i32;
+        val += ch as i32;
+
+        if isneg { val = -val; }
 
         return Some(ParseResult {
             place: loc,
             place_hash: loc_hash,
-            val: val as f32 / divisor,
+            val,
             next: idx + 1,
         });
     }
 
-    val += (ch - b'0') as i32;
+    val += ch as i32;
     val *= 10;
 
     // Assume that the next character will be a decimal
     idx += 1 + 1;
     ch = unsafe { *data.get_unchecked(idx) };
 
-    val += (ch - b'0') as i32;
+    val += ch as i32;
+
+    if isneg { val = -val; }
 
     Some(ParseResult {
         place: loc,
         place_hash: loc_hash,
-        val: val as f32 / divisor,
+        val,
         next: idx + 1,
     })
 }
 
-fn print_store(sorted_store: &Vec<(&[u8], Data)>) {
+fn print_store(sorted_store: &Vec<(&[u8], Data, u32)>) {
     print!("{{");
 
     for (idx, val) in sorted_store.iter().enumerate() {
         print!(
             "{}={:.1}/{:.1}/{:.1}",
             unsafe { std::str::from_utf8_unchecked(val.0) },
-            val.1.min,
-            val.1.sum / (val.1.count as f32),
-            val.1.max
+            conv_num(val.1.min),
+            conv_num(val.1.sum) / (val.1.count as f32),
+            conv_num(val.1.max),
         );
         if idx != sorted_store.len() - 1 {
             print!(", ")
@@ -397,12 +341,33 @@ fn print_store(sorted_store: &Vec<(&[u8], Data)>) {
     print!("}}");
 }
 
+fn conv_num(mut num: i32) -> f32 {
+    let thrice = 111 * b'0' as i32;
+    let twice = 11 * b'0' as i32;
+
+    let divisor = if num < 0 {
+        num = -num;
+        -10.
+    } else {
+        10.
+    };
+
+    if num > thrice {
+        return (num - thrice) as f32 / divisor;
+    }
+    if num > twice {
+        return (num - twice) as f32 / divisor;
+    }
+
+    panic!("number shouldn't be this small!")
+}
+
 fn main() {
     let path = std::env::args()
         .nth(1)
         .expect("Usage: <bin> <path-to-measurements.txt>");
 
-    let mut store = Map::new();
+    let mut store = LookupTable::new();
 
     cluster_process(&path, &mut store);
 

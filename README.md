@@ -108,7 +108,15 @@ Total time taken: 1.2 sec
 ## Iteration 9
 - Pin threads to CPU
 
-Total time taken: 1.1 sec
+Total time taken: 1.16 sec
 
 ### Observations 
 ![Ninth flamegraph](./assets/flamegraph.9.svg)
+
+
+## Iteration 10
+- Convert HashMap to a `Lookup Table` - remove irrelevant hash slots
+- Replace hashing algorithm with `djb2` - remove multiplication op (was slow)
+- Lazy number parsing
+
+Total time taken: 1.10 sec
